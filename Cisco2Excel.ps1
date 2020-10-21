@@ -22,22 +22,32 @@ Function InitInterface {
     $InitRule | Add-Member -type NoteProperty -name qos -Value ""  
     return $InitRule
 }
-Function GetSubnetCIDR ([string]$Subnet,[IPAddress]$SubnetMask) {
-    $binaryOctets = $SubnetMask.GetAddressBytes() | ForEach-Object { [Convert]::ToString($_, 2) }
-    $SubnetCIDR = $Subnet + "/" + ($binaryOctets -join '').Trim('0').Length
-    return $SubnetCIDR
+Function ChangeFontExcelCell ($ChangeFontExcelCellSheet, $ChangeFontExcelCellRow, $ChangeFontExcelCellColumn) {
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).HorizontalAlignment = -4108
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.Size = 18
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.Bold=$True
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.Name = "Cambria"
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.ThemeFont = 1
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.ThemeColor = 4
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.ColorIndex = 55
+    $ChangeFontExcelCellSheet.Cells.Item($ChangeFontExcelCellRow, $ChangeFontExcelCellColumn).Font.Color = 8210719
 }
 Function CreateExcelSheet ($SheetName, $SheetArray) {
     if ($SheetArray) {
-        $row = 2
+        $row = 1
         $Sheet = $workbook.Worksheets.Add()
         $Sheet.Name = $SheetName
         $Column=1
-        $NoteProperties = $SheetArray | get-member -Type NoteProperty
+        $excel.cells.item($row,$Column) = $SheetName 
+        ChangeFontExcelCell $Sheet $row $Column  
+        $row++
+        $NoteProperties = SkipEmptyNoteProperties $SheetArray
         foreach ($Noteproperty in $NoteProperties) {
-            $excel.cells.item(1,$Column) = $Noteproperty.Name
+            $excel.cells.item($row,$Column) = $Noteproperty.Name
             $Column++
         }
+        $StartRow = $Row
+        $row++
         foreach ($rule in $SheetArray) {
             $Column=1
             foreach ($Noteproperty in $NoteProperties) {
@@ -48,11 +58,65 @@ Function CreateExcelSheet ($SheetName, $SheetArray) {
             }    
             $row++
         }    
+        $RowCount =  $Sheet.UsedRange.Rows.Count
+        $ColumCount =  $Sheet.UsedRange.Columns.Count
+        $ColumExcel = Convert-NumberToA1 $ColumCount
+        $HeaderRange = $Sheet.Range("A$($StartRow):$($ColumExcel)$($RowCount)").AutoFilter()
         #Use autoFit to expand the colums
         $UsedRange = $Sheet.usedRange                  
         $UsedRange.EntireColumn.AutoFit() | Out-Null
     }
 }
+#Function from https://gallery.technet.microsoft.com/office/Powershell-function-that-88f9f690
+Function Convert-NumberToA1 { 
+    <# 
+    .SYNOPSIS 
+    This converts any integer into A1 format. 
+    .DESCRIPTION 
+    See synopsis. 
+    .PARAMETER number 
+    Any number between 1 and 2147483647 
+    #> 
+     
+    Param([parameter(Mandatory=$true)] 
+          [int]$number) 
+   
+    $a1Value = $null 
+    While ($number -gt 0) { 
+      $multiplier = [int][system.math]::Floor(($number / 26)) 
+      $charNumber = $number - ($multiplier * 26) 
+      If ($charNumber -eq 0) { $multiplier-- ; $charNumber = 26 } 
+      $a1Value = [char]($charNumber + 64) + $a1Value 
+      $number = $multiplier 
+    } 
+    Return $a1Value 
+  }
+Function GetSubnetCIDR ([string]$Subnet,[IPAddress]$SubnetMask) {
+    $binaryOctets = $SubnetMask.GetAddressBytes() | ForEach-Object { [Convert]::ToString($_, 2) }
+    $SubnetCIDR = $Subnet + "/" + ($binaryOctets -join '').Trim('0').Length
+    return $SubnetCIDR
+}
+#Function SkipEmptyNoteProperties ($SkipEmptyNotePropertiesArray)
+#This function Loopt through all available noteproperties and checks if it is used.
+#If it is not used the property will not be returned as it is not needed in the export.
+Function SkipEmptyNoteProperties ($SkipEmptyNotePropertiesArray) {
+    $ReturnNoteProperties = [System.Collections.ArrayList]@()
+    $SkipNotePropertiesOrg = $SkipEmptyNotePropertiesArray | get-member -Type NoteProperty
+    foreach ($SkipNotePropertieOrg in $SkipNotePropertiesOrg) {
+        foreach ($SkipEmptyNotePropertiesMember in $SkipEmptyNotePropertiesArray) {
+            $NotePropertyFound = $False
+            $SkipNotePropertiePropertyString = [string]$SkipNotePropertieOrg.Name
+            if ($SkipEmptyNotePropertiesMember.$SkipNotePropertiePropertyString) { 
+                $NotePropertyFound = $True
+                break;
+            }
+        }
+        If ($NotePropertyFound) { $ReturnNoteProperties.Add($SkipNotePropertieOrg) | Out-Null  }
+    }
+
+    return $ReturnNoteProperties
+}
+
 $startTime = get-date 
 $date = Get-Date -Format yyyyMMddHHmm
 Clear-Host
@@ -88,7 +152,8 @@ $FirstSheet.Cells.Item(1,1).Font.ColorIndex = 55
 $FirstSheet.Cells.Item(1,1).Font.Color = 8210719
 $InterfaceSwitch=$False
 $MaxCounter=$loadedConfig.count
-$InterfaceList = @()
+$InterfaceList = [System.Collections.ArrayList]@()
+$RouterTable = [System.Collections.ArrayList]@()
 foreach ($Line in $loadedConfig) {
     $Proc = $Counter/$MaxCounter*100
     $elapsedTime = $(get-date) - $startTime 
@@ -102,7 +167,7 @@ foreach ($Line in $loadedConfig) {
     $ConfigLineArray = $Configline.Split(" ")    
     switch($ConfigLineArray[0]) {
         "" {
-            #Do noting
+            #Do nothing
         }
         "Channel-group" {
             $Interface | Add-Member -MemberType NoteProperty -Name channel-group -Value $ConfigLineArray[1] -force
@@ -130,6 +195,15 @@ foreach ($Line in $loadedConfig) {
             if ($InterfaceSwitch) {
                 $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3] 
                 $Interface | Add-Member -MemberType NoteProperty -Name IPadress -Value $Value -force
+            }
+            else {
+                if ($ConfigLineArray[1] -eq "route") {
+                    $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3]
+                    $Route = New-Object System.Object;
+                    $Route | Add-Member -type NoteProperty -name Network -Value $Value
+                    $Route | Add-Member -type NoteProperty -name Gateway -Value $ConfigLineArray[4]
+                    $RouterTable.Add($Route) | Out-Null
+                }
             }
         }
         "no" {
@@ -160,7 +234,7 @@ foreach ($Line in $loadedConfig) {
         }
         "!" {
             if ($InterfaceSwitch) {
-                $InterfaceList += $Interface
+                $InterfaceList.Add($Interface) | Out-Null
                 $InterfaceSwitch=$False
             }
         }
@@ -173,6 +247,7 @@ foreach ($Line in $loadedConfig) {
 }
 #make sure that the first sheet that is opened by Excel is the global sheet.
 CreateExcelSheet "Interfaces" $Interfacelist 
+CreateExcelSheet "RoutingTable" $RouterTable
 $FirstSheet.Activate()
 $FirstSheet.Cells.Item(2,1) = 'Excel Creation Date'
 $FirstSheet.Cells.Item(2,2) = $Date
