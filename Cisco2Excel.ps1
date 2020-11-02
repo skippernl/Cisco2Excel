@@ -1,7 +1,28 @@
-Param
+<#
+.SYNOPSIS
+Cisco2Excel parses the configuration from a Cisco (IOS) device into a Excel file.
+.DESCRIPTION
+The Cisco2Excel reads a Cisco (IOS) config file and pulls out the configuration into excel.
+.PARAMETER CiscoConfig
+[REQUIRED] This is the path to the Cisco config/credential file
+.PARAMETER SkipFilter 
+[OPTIONAL] Set this value to $TRUE for not using Excel Filters.
+.\Cisco2Excel.ps1 -CiscoConfig "c:\temp\config.conf"
+    Parses a Cisco config file and places the Excel file in the same folder where the config was found.
+.\Cisco2Excel.ps1 -CiscoConfig "c:\temp\config.conf" -SkipFilter:$true
+    Parses a Cisco config file and places the Excel file in the same folder where the config was found.
+    No filters will be auto applied.
+.NOTES
+Author: Xander Angenent (@XaAng70)
+Last Modified: 2020/10/26
+#Uses Estimated completion time from http://mylifeismymessage.net/1672/
+#Uses Posh-SSH https://github.com/darkoperator/Posh-SSH if reading directly from the firewall
+#Uses Function that converts any Excel column number to A1 format https://gallery.technet.microsoft.com/office/Powershell-function-that-88f9f690
+#>Param
 (
     [Parameter(Mandatory = $true)]
-    $CiscoConfig
+    $CiscoConfig,
+    [switch]$SkipFilter = $false
 )
 
 Function InitInterface {
@@ -9,6 +30,7 @@ Function InitInterface {
     $InitRule | Add-Member -type NoteProperty -name Interface -Value ""
     $InitRule | Add-Member -type NoteProperty -name Description -Value ""
     $InitRule | Add-Member -type NoteProperty -name IPadress -Value ""
+    $InitRule | Add-Member -type NoteProperty -name IPhelper -Value ""
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode-access-vlan" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode-trunk-native-vlan" -Value ""
@@ -58,10 +80,13 @@ Function CreateExcelSheet ($SheetName, $SheetArray) {
             }    
             $row++
         }    
-        $RowCount =  $Sheet.UsedRange.Rows.Count
-        $ColumCount =  $Sheet.UsedRange.Columns.Count
-        $ColumExcel = Convert-NumberToA1 $ColumCount
-        $HeaderRange = $Sheet.Range("A$($StartRow):$($ColumExcel)$($RowCount)").AutoFilter()
+        #No need to filer if there is only one row.
+        if (!($SkipFilter) -and ($SheetArray.Count -gt 1)) {
+            $RowCount =  $Sheet.UsedRange.Rows.Count
+            $ColumCount =  $Sheet.UsedRange.Columns.Count
+            $ColumExcel = Convert-NumberToA1 $ColumCount
+            $Sheet.Range("A$($StartRow):$($ColumExcel)$($RowCount)").AutoFilter() | Out-Null
+        }
         #Use autoFit to expand the colums
         $UsedRange = $Sheet.usedRange                  
         $UsedRange.EntireColumn.AutoFit() | Out-Null
@@ -127,6 +152,13 @@ DO {
     Write-output ""
     $I++
 } While ($i -le 4)
+If ($SkipFilter) {
+    Write-Output "SkipFilter parmeter is set to True. Skipping filter function in Excel."
+}
+if (!(Test-Path $CiscoConfig)) {
+    Write-Output "File $CiscoConfig not found. Aborting script."
+    exit 1
+}
 $loadedConfig = Get-Content $CiscoConfig
 $Counter=0
 $workingFolder = Split-Path $CiscoConfig;
@@ -140,7 +172,7 @@ $FirstSheet = $workbook.Worksheets.Item(1)
 $FirstSheet.Name = $FileName
 $FirstSheet.Cells.Item(1,1)= 'Cisco Configuration'
 $MergeCells = $FirstSheet.Range("A1:G1")
-$MergeCells.Select()
+$MergeCells.Select() | Out-Null
 $MergeCells.MergeCells = $true
 $FirstSheet.Cells(1, 1).HorizontalAlignment = -4108
 $FirstSheet.Cells.Item(1,1).Font.Size = 18
@@ -193,8 +225,23 @@ foreach ($Line in $loadedConfig) {
         }
         "ip" {
             if ($InterfaceSwitch) {
-                $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3] 
-                $Interface | Add-Member -MemberType NoteProperty -Name IPadress -Value $Value -force
+                switch($ConfigLineArray[1]) {
+                    "address" {
+                        $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3] 
+                        $Interface | Add-Member -MemberType NoteProperty -Name IPadress -Value $Value -force
+                    }
+                    "helper-address" {
+                        $Value = $Interface.IPhelper
+                        if ($Value -eq "") {
+                            $Value = $ConfigLineArray[2]
+                        }
+                        else {
+                            $Value = $Value + "," + $ConfigLineArray[2]
+                        }
+                        $Interface | Add-Member -MemberType NoteProperty -Name IPhelper -Value $Value -force
+                    }
+
+                }
             }
             else {
                 if ($ConfigLineArray[1] -eq "route") {
