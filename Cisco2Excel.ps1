@@ -24,23 +24,35 @@ Last Modified: 2020/10/26
     $CiscoConfig,
     [switch]$SkipFilter = $false
 )
-
+Function InitAccessListFlow {
+    $InitRule = New-Object System.Object;
+    $InitRule | Add-Member -MemberType NoteProperty -Name Name -Value $FlowName -force
+    $InitRule | Add-Member -MemberType NoteProperty -Name Counter -Value $Counter -force
+    $InitRule | Add-Member -MemberType NoteProperty -Name Line -Value "" -force
+    return $InitRule
+}    
 Function InitInterface {
     $InitRule = New-Object System.Object;
-    $InitRule | Add-Member -type NoteProperty -name Interface -Value ""
+    $InitRule | Add-Member -type NoteProperty -name arp -Value ""
+    $InitRule | Add-Member -type NoteProperty -name cdp -Value "enabled"
+    $InitRule | Add-Member -type NoteProperty -name "channel-group" -Value ""  
+    $InitRule | Add-Member -type NoteProperty -name "channel-group-mode" -Value ""
     $InitRule | Add-Member -type NoteProperty -name Description -Value ""
+    $InitRule | Add-Member -type NoteProperty -name dhcp -Value ""
+    $InitRule | Add-Member -type NoteProperty -name duplex -Value "Auto" 
+    $InitRule | Add-Member -type NoteProperty -name Interface -Value ""    
     $InitRule | Add-Member -type NoteProperty -name IPadress -Value ""
     $InitRule | Add-Member -type NoteProperty -name IPhelper -Value ""
+    $InitRule | Add-Member -type NoteProperty -name lldp -Value "" 
+    $InitRule | Add-Member -type NoteProperty -name "route-cache" -Value ""
+    $InitRule | Add-Member -type NoteProperty -name "spanning-tree" -Value ""
+    $InitRule | Add-Member -type NoteProperty -name speed -Value "Auto"    
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode-access-vlan" -Value ""
+    $InitRule | Add-Member -type NoteProperty -name "switchport-mode-trunk-allowed-vlan" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "switchport-mode-trunk-native-vlan" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "Switchport-voice-vlan" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "priority-queue" -Value ""
-    $InitRule | Add-Member -type NoteProperty -name "spanning-tree" -Value ""
-    $InitRule | Add-Member -type NoteProperty -name speed -Value "Auto"
-    $InitRule | Add-Member -type NoteProperty -name duplex -Value "Auto"    
-    $InitRule | Add-Member -type NoteProperty -name "channel-group" -Value ""  
-    $InitRule | Add-Member -type NoteProperty -name "channel-group-mode" -Value ""
     $InitRule | Add-Member -type NoteProperty -name qos -Value ""  
     return $InitRule
 }
@@ -183,7 +195,10 @@ $FirstSheet.Cells.Item(1,1).Font.ThemeColor = 4
 $FirstSheet.Cells.Item(1,1).Font.ColorIndex = 55
 $FirstSheet.Cells.Item(1,1).Font.Color = 8210719
 $InterfaceSwitch=$False
+$FlowSwitch=$False
 $MaxCounter=$loadedConfig.count
+$AccessListList = [System.Collections.ArrayList]@()
+$FlowList = [System.Collections.ArrayList]@()
 $InterfaceList = [System.Collections.ArrayList]@()
 $RouterTable = [System.Collections.ArrayList]@()
 foreach ($Line in $loadedConfig) {
@@ -212,8 +227,29 @@ foreach ($Line in $loadedConfig) {
                 For ($ConfigLineArrayCount=2; $ConfigLineArrayCount -le $ConfigLineArray.Count; $ConfigLineArrayCount++) {
                 $Value = $Value + " " + $ConfigLineArray[$ConfigLineArrayCount]
                 }
-            }           
-            $Interface | Add-Member -MemberType NoteProperty -Name $ConfigLineArray[0] -Value $Value -force
+            } 
+            if ($FlowSwitch) {
+                $Flow = InitAccessListFlow
+                $FlowAccessListCounter++
+                $Flow | Add-Member -MemberType NoteProperty -Name Name -Value $FlowName -force
+                $Flow | Add-Member -MemberType NoteProperty -Name Counter -Value $FlowAccessListCounter -force
+                $Flow | Add-Member -MemberType NoteProperty -Name Line -Value $ConfigLine -force
+                $FlowList.Add($Flow) |Out-Null                
+            }     
+            else {              
+                if ($InterfaceSwitch) {
+                    $Interface | Add-Member -MemberType NoteProperty -Name $ConfigLineArray[0] -Value $Value -force
+                }
+            }
+        }
+        "flow" {
+            $FLow = InitAccessListFlow
+            $FlowName = $ConfigLineArray[1] + " " + $ConfigLineArray[2]
+            $FlowAccessListCounter=0
+            $Flow | Add-Member -MemberType NoteProperty -Name Name -Value $FlowName -force
+            $Flow | Add-Member -MemberType NoteProperty -Name Counter -Value $FlowAccessListCounter -force
+            $FlowList.Add($Flow) |Out-Null
+            $FlowSwitch=$true
         }
         "hostname" {
             $Hostname = $ConfigLineArray[1]
@@ -244,19 +280,51 @@ foreach ($Line in $loadedConfig) {
                 }
             }
             else {
-                if ($ConfigLineArray[1] -eq "route") {
-                    $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3]
-                    $Route = New-Object System.Object;
-                    $Route | Add-Member -type NoteProperty -name Network -Value $Value
-                    $Route | Add-Member -type NoteProperty -name Gateway -Value $ConfigLineArray[4]
-                    $RouterTable.Add($Route) | Out-Null
+                switch ($ConfigLineArray[1]) {
+                    "route" {
+                        $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3]
+                        $Route = New-Object System.Object;
+                        $Route | Add-Member -type NoteProperty -name Network -Value $Value
+                        $Route | Add-Member -type NoteProperty -name Gateway -Value $ConfigLineArray[4]
+                        $RouterTable.Add($Route) | Out-Null
+                    }
+                    "access-list" {
+                        $AccessList = InitAccessListFlow
+                        $AccessListName = $ConfigLineArray[2] + " " + $ConfigLineArray[3]
+                        $FlowAccessListCounter=0
+                        $AccessList | Add-Member -MemberType NoteProperty -Name Name -Value $AccessListName -force
+                        $AccessList | Add-Member -MemberType NoteProperty -Name Counter -Value $FlowAccessListCounter -force
+                        $AccessListList.Add($AccessList) |Out-Null
+                        $AccessListSwitch=$true
+                    }
                 }
             }
         }
         "no" {
             if ($InterfaceSwitch) {
-                if ($ConfigLineArray[1] -eq "ip") { $Interface | Add-Member -MemberType NoteProperty -Name IPadress -Value "no ip address" -force }
+                switch ($ConfigLineArray[1]) {
+                    "ip" { 
+                        $Interface | Add-Member -MemberType NoteProperty -Name IPadress -Value "no ip address" -force
+                    }
+                    "cdp" {
+                        $Interface | Add-Member -MemberType NoteProperty -Name cdp -Value "disabled" -force                       
+                    }
+                    "lldp" {
+                        if ($Interface.lldp) {
+                            $LldpValue = $ConfigLineArray[2] + "+" + $Interface.lldp
+                        }
+                        else {
+                             $LldpValue = $ConfigLineArray[2] + " disabled"
+                        }  
+                        $Interface | Add-Member -MemberType NoteProperty -Name lldp -Value $LldpValue -force                    
+                    }                    
+                }
             }
+        }
+        "shutdown" {
+            #Interface is shutdown
+            $Interface | Add-Member -type NoteProperty -name speed -Value "Shutdown" -force
+            $Interface | Add-Member -type NoteProperty -name duplex -Value "Shutdown"  -force            
         }
         "spanning-tree" {
             if ($InterfaceSwitch) {
@@ -272,7 +340,14 @@ foreach ($Line in $loadedConfig) {
                     $Interface | Add-Member -MemberType NoteProperty -Name switchport-mode -Value $ConfigLineArray[2] -force 
                 }
                 "trunk" {
-                    $Interface | Add-Member -MemberType NoteProperty -Name switchport-mode-trunk-native-vlan -Value $ConfigLineArray[4] -force                    
+                    switch ($ConfigLineArray[2]) {
+                        "native" {
+                            $Interface | Add-Member -MemberType NoteProperty -Name switchport-mode-trunk-native-vlan -Value $ConfigLineArray[4] -force
+                        }
+                        "allowed" {
+                            $Interface | Add-Member -MemberType NoteProperty -Name switchport-mode-trunk-allowed-vlan -Value $ConfigLineArray[4] -force
+                        }
+                    }                  
                 }
                 "Voice" {
                     $Interface | Add-Member -MemberType NoteProperty -Name Switchport-voice-vlan -Value $ConfigLineArray[3] -force 
@@ -284,17 +359,46 @@ foreach ($Line in $loadedConfig) {
                 $InterfaceList.Add($Interface) | Out-Null
                 $InterfaceSwitch=$False
             }
+            else { 
+                $FlowAccessListCounter=0
+                $AccessListSwitch=$false 
+                $FlowSwitch=$false 
+            }
         }
         default {
             if ($InterfaceSwitch) {
                 $Interface | Add-Member -MemberType NoteProperty -Name $ConfigLineArray[1] -Value $ConfigLineArray[2] -force
             }
+            elseif ($FlowSwitch) {
+                $Flow = InitAccessListFlow
+                $FlowAccessListCounter++
+                $Flow | Add-Member -MemberType NoteProperty -Name Name -Value $FlowName -force
+                $Flow | Add-Member -MemberType NoteProperty -Name Counter -Value $FlowAccessListCounter -force
+                $Flow | Add-Member -MemberType NoteProperty -Name Line -Value $ConfigLine -force
+                $FlowList.Add($Flow) |Out-Null                
+            }
+            elseif ($AccessListSwitch) {
+                $AccessList  = InitAccessListFlow
+                $FlowAccessListCounter++
+                $AccessList | Add-Member -MemberType NoteProperty -Name Name -Value $AccessListName -force
+                $AccessList | Add-Member -MemberType NoteProperty -Name Counter -Value $FlowAccessListCounter -force
+                $AccessList | Add-Member -MemberType NoteProperty -Name Line -Value $ConfigLine -force
+                $AccessListList.Add($AccessList) |Out-Null  
+            }
         }
     }
 }
 #make sure that the first sheet that is opened by Excel is the global sheet.
+if ($FlowList) { 
+    $FlowList = $FlowList | Sort-Object Name,Counter
+    CreateExcelSheet "Flow" $FlowList
+}
 CreateExcelSheet "Interfaces" $Interfacelist 
 CreateExcelSheet "RoutingTable" $RouterTable
+if ($AccessListList) { 
+    $AccessListList = $AccessListList | Sort-Object Name,Counter
+    CreateExcelSheet "Accesslist" $AccessListList
+}
 $FirstSheet.Activate()
 $FirstSheet.Cells.Item(2,1) = 'Excel Creation Date'
 $FirstSheet.Cells.Item(2,2) = $Date
