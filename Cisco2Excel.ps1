@@ -24,6 +24,22 @@ Last Modified: 2020/10/26
     $CiscoConfig,
     [switch]$SkipFilter = $false
 )
+Function CleanSheetName ($CSName) {
+    $CSName = $CSName.Replace("-","_")
+    $CSName = $CSName.Replace(" ","_")
+    $CSName = $CSName.Replace("\","_")
+    $CSName = $CSName.Replace("/","_")
+    $CSName = $CSName.Replace("[]","_")
+    $CSName = $CSName.Replace("]","_")
+    $CSName = $CSName.Replace("*","_")
+    $CSName = $CSName.Replace("?","_")
+    if ($CSName.Length -gt 32) {
+        Write-output "Sheetname ($CSName) cannot be longer that 32 character shorting name to fit."
+        $CSName = $CSName.Substring(0,31)
+    }    
+
+    return $CSName
+}
 Function InitAccessListFlow {
     $InitRule = New-Object System.Object;
     $InitRule | Add-Member -MemberType NoteProperty -Name Name -Value $FlowName -force
@@ -54,6 +70,7 @@ Function InitInterface {
     $InitRule | Add-Member -type NoteProperty -name "Switchport-voice-vlan" -Value ""
     $InitRule | Add-Member -type NoteProperty -name "priority-queue" -Value ""
     $InitRule | Add-Member -type NoteProperty -name qos -Value ""  
+    $InitRule | Add-Member -type NoteProperty -name vrf -Value ""  
     return $InitRule
 }
 Function ChangeFontExcelCell ($ChangeFontExcelCellSheet, $ChangeFontExcelCellRow, $ChangeFontExcelCellColumn) {
@@ -181,7 +198,6 @@ $Excel = New-Object -ComObject Excel.Application
 $Excel.Visible = $false
 $workbook = $excel.Workbooks.Add()
 $FirstSheet = $workbook.Worksheets.Item(1) 
-$FirstSheet.Name = $FileName
 $FirstSheet.Cells.Item(1,1)= 'Cisco Configuration'
 $MergeCells = $FirstSheet.Range("A1:G1")
 $MergeCells.Select() | Out-Null
@@ -197,10 +213,12 @@ $FirstSheet.Cells.Item(1,1).Font.Color = 8210719
 $InterfaceSwitch=$False
 $FlowSwitch=$False
 $MaxCounter=$loadedConfig.count
+$SpanningTree = ""
 $AccessListList = [System.Collections.ArrayList]@()
 $FlowList = [System.Collections.ArrayList]@()
 $InterfaceList = [System.Collections.ArrayList]@()
 $RouterTable = [System.Collections.ArrayList]@()
+$UserTable = [System.Collections.ArrayList]@()
 foreach ($Line in $loadedConfig) {
     $Proc = $Counter/$MaxCounter*100
     $elapsedTime = $(get-date) - $startTime 
@@ -276,18 +294,10 @@ foreach ($Line in $loadedConfig) {
                         }
                         $Interface | Add-Member -MemberType NoteProperty -Name IPhelper -Value $Value -force
                     }
-
                 }
             }
             else {
                 switch ($ConfigLineArray[1]) {
-                    "route" {
-                        $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3]
-                        $Route = New-Object System.Object;
-                        $Route | Add-Member -type NoteProperty -name Network -Value $Value
-                        $Route | Add-Member -type NoteProperty -name Gateway -Value $ConfigLineArray[4]
-                        $RouterTable.Add($Route) | Out-Null
-                    }
                     "access-list" {
                         $AccessList = InitAccessListFlow
                         $AccessListName = $ConfigLineArray[2] + " " + $ConfigLineArray[3]
@@ -297,6 +307,24 @@ foreach ($Line in $loadedConfig) {
                         $AccessListList.Add($AccessList) |Out-Null
                         $AccessListSwitch=$true
                     }
+                    "domain" {
+                        $DomainName = $ConfigLineArray[3]
+                    }
+                    "name-server" {
+                        $NameServer = $ConfigLineArray[2]
+                        $Counter = 2
+                        do {
+                            $Counter++
+                            $NameServer = $NameServer + " " + $ConfigLineArray[$Counter]                        
+                        } While ($Counter -le $ConfigLineArray.Count)
+                    }
+                    "route" {
+                        $Value = GetSubnetCIDR $ConfigLineArray[2] $ConfigLineArray[3]
+                        $Route = New-Object System.Object;
+                        $Route | Add-Member -type NoteProperty -name Network -Value $Value
+                        $Route | Add-Member -type NoteProperty -name Gateway -Value $ConfigLineArray[4]
+                        $RouterTable.Add($Route) | Out-Null
+                    }                    
                 }
             }
         }
@@ -314,7 +342,7 @@ foreach ($Line in $loadedConfig) {
                             $LldpValue = $ConfigLineArray[2] + "+" + $Interface.lldp
                         }
                         else {
-                             $LldpValue = $ConfigLineArray[2] + " disabled"
+                            $LldpValue = $ConfigLineArray[2] + " disabled"
                         }  
                         $Interface | Add-Member -MemberType NoteProperty -Name lldp -Value $LldpValue -force                    
                     }                    
@@ -329,6 +357,14 @@ foreach ($Line in $loadedConfig) {
         "spanning-tree" {
             if ($InterfaceSwitch) {
                 $Interface | Add-Member -MemberType NoteProperty -Name spanning-tree -Value $ConfigLineArray[1] -force 
+            }
+            else {
+                if ($SpanningTree -eq "") {
+                    $SpanningTree = $ConfigLineArray[1] + " " + $ConfigLineArray[2]
+                }
+                else {
+                    $SpanningTree = $SpanningTree + " and " + $ConfigLineArray[1] + " " + $ConfigLineArray[2]
+                }
             }
         }
         "switchport" {
@@ -353,6 +389,12 @@ foreach ($Line in $loadedConfig) {
                     $Interface | Add-Member -MemberType NoteProperty -Name Switchport-voice-vlan -Value $ConfigLineArray[3] -force 
                 }
             }
+        }
+        "username" {
+            $User = New-Object System.Object;
+            $User | Add-Member -type NoteProperty -name Username -Value $ConfigLineArray[1]
+            $User | Add-Member -type NoteProperty -name privilege -Value $ConfigLineArray[3]
+            $UserTable.Add($User) | Out-Null
         }
         "!" {
             if ($InterfaceSwitch) {
@@ -388,17 +430,18 @@ foreach ($Line in $loadedConfig) {
         }
     }
 }
-#make sure that the first sheet that is opened by Excel is the global sheet.
 if ($FlowList) { 
     $FlowList = $FlowList | Sort-Object Name,Counter
     CreateExcelSheet "Flow" $FlowList
 }
 CreateExcelSheet "Interfaces" $Interfacelist 
 CreateExcelSheet "RoutingTable" $RouterTable
+CreateExcelSheet "UserTable" $UserTable
 if ($AccessListList) { 
     $AccessListList = $AccessListList | Sort-Object Name,Counter
     CreateExcelSheet "Accesslist" $AccessListList
 }
+#make sure that the first sheet that is opened by Excel is the global sheet.
 $FirstSheet.Activate()
 $FirstSheet.Cells.Item(2,1) = 'Excel Creation Date'
 $FirstSheet.Cells.Item(2,2) = $Date
@@ -413,6 +456,13 @@ $FirstSheet.Cells.Item(4,2) = $LastNVRAMConfigLine
 #$FirstSheet.Cells.Item(4,2).numberformat = "00"
 $FirstSheet.Cells.Item(5,1) = 'Hostname'
 $FirstSheet.Cells.Item(5,2) = $Hostname
+$FirstSheet.Cells.Item(7,1) = "Spanning tree"
+$FirstSheet.Cells.Item(7,2) = $SpanningTree
+$FirstSheet.Cells.Item(8,1) = "Domainname"
+$FirstSheet.Cells.Item(8,2) = $DomainName
+$FirstSheet.Cells.Item(9,1) = "DNS Server(s)"
+$FirstSheet.Cells.Item(9,2) = $NameServer
+$FirstSheet.Name = $Hostname
 $UsedRange = $FirstSheet.usedRange                  
 $UsedRange.EntireColumn.AutoFit() | Out-Null
 Write-Output "Writing Excelfile $ExcelFullFilePad.xls"
